@@ -368,6 +368,7 @@ def main():
         sys.exit(1)
     except Exception as e:
         print(f"Неожиданная ошибка: {e}")
+
         sys.exit(1)
 
 
