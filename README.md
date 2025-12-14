@@ -253,382 +253,284 @@ Semantic error: + expects integer arguments, got types: int, str
 ## Пример кода
 ### Файл main.py
 ```
-#!/usr/bin/env python3
 import sys
 import json
-import argparse
+from pathlib import Path
+from lark import Lark, Transformer, v_args, UnexpectedInput, Tree, Token
 
-from config_parser import parse_and_evaluate
+grammar = r"""
+    start: (statement)*
+
+    ?statement: const_def | expr_value
+
+    const_def: "(" "def" IDENTIFIER value ")" ";"
+
+    expr_value: value ";"
+
+    ?value: NUMBER
+          | STRING
+          | array
+          | dict
+          | IDENTIFIER          -> const_ref
+          | expr
+
+    array: "array" "(" [value ("," value)*] ")"
+
+    dict: "([" [pair ("," pair)*] ","? "])"
+    pair: IDENTIFIER ":" value   -> dict_pair
+
+    ?expr: "{" OPER value value "}"   -> binary_op
+         | "{" "chr" value "}"        -> chr_op
+         | "{" "len" value "}"        -> len_op
+
+    OPER: "+" | "-" | "*" | "/"
+
+    IDENTIFIER: /[A-Z]+/
+    NUMBER: /\d+/
+    STRING: /"[^"]*"/
+
+    %import common.WS
+    %import common.NEWLINE
+    %ignore WS
+    %ignore COMMENT
+    COMMENT: "%" /[^\n]*/
+"""
+
+
+class ConstCollector(Transformer):
+    """Первый проход: собираем все определения констант"""
+
+    def __init__(self):
+        self.consts = {}
+
+    def const_def(self, args):
+        name = str(args[0])
+        value_tree = args[1]
+        self.consts[name] = value_tree
+        return None  # Удаляем из результата
+
+    def expr_value(self, args):
+        return None  # Игнорируем значения в первом проходе
+
+    def start(self, _):
+        return self.consts
+
+
+class Evaluator(Transformer):
+    """Второй проход: вычисляем значения с уже известными константами"""
+
+    def __init__(self, consts):
+        super().__init__()
+        self.consts = {}
+        # Вычисляем константы в порядке определения
+        for name, value_tree in consts.items():
+            self.consts[name] = self.transform(value_tree)
+
+    # Обработка литералов
+    def NUMBER(self, token):
+        return int(token)
+
+    def STRING(self, token):
+        return token[1:-1]  # Убираем кавычки
+
+    # Обработка констант
+    def const_ref(self, args):
+        name = str(args[0])
+        if name in self.consts:
+            return self.consts[name]
+        raise ValueError(f"Undefined constant: {name}")
+
+    # Обработка массивов
+    def array(self, items):
+        return [self.transform(item) if isinstance(item, Tree) else item for item in items]
+
+    # Обработка словарей
+    def dict_pair(self, args):
+        key = str(args[0])
+        value = args[1]
+        if isinstance(value, Tree):
+            value = self.transform(value)
+        return (key, value)
+
+    def dict(self, pairs):
+        result = {}
+        for key, value in pairs:
+            if isinstance(value, Tree):
+                value = self.transform(value)
+            result[key] = value
+        return result
+
+    # Обработка выражений
+    def binary_op(self, args):
+        op = str(args[0])
+        left = self.transform(args[1]) if isinstance(args[1], Tree) else args[1]
+        right = self.transform(args[2]) if isinstance(args[2], Tree) else args[2]
+
+        if op == "+":
+            return left + right
+        elif op == "-":
+            return left - right
+        elif op == "*":
+            return left * right
+        elif op == "/":
+            if right == 0:
+                raise ValueError("Division by zero")
+            return left // right
+        else:
+            raise ValueError(f"Unknown operator: {op}")
+
+    def chr_op(self, args):
+        val = self.transform(args[0]) if isinstance(args[0], Tree) else args[0]
+        if not isinstance(val, int):
+            raise ValueError("chr() expects an integer")
+        return chr(val)
+
+    def len_op(self, args):
+        val = self.transform(args[0]) if isinstance(args[0], Tree) else args[0]
+        if not isinstance(val, str):
+            raise ValueError("len() expects a string")
+        return len(val)
+
+    # Обработка верхнеуровневых конструкций
+    def expr_value(self, args):
+        value = args[0]
+        if isinstance(value, Tree):
+            return self.transform(value)
+        return value
+
+    def const_def(self, _):
+        return None  # Уже обработано в первом проходе
+
+    def start(self, args):
+        result = []
+        for item in args:
+            if item is not None:
+                if isinstance(item, Tree):
+                    result.append(self.transform(item))
+                else:
+                    result.append(item)
+        return result
+
+
+def parse_config(text):
+    parser = Lark(grammar, parser='lalr')
+    tree = parser.parse(text)
+
+    # Первый проход: собираем константы
+    collector = ConstCollector()
+    consts = collector.transform(tree)
+
+    # Второй проход: вычисляем всё
+    evaluator = Evaluator(consts)
+    result = evaluator.transform(tree)
+    return result
+
 
 def main():
-    parser = argparse.ArgumentParser(description='Config to JSON converter')
-    parser.add_argument('--input', required=True, 
-                       help='Path to input config file')
-    args = parser.parse_args()
+    if len(sys.argv) != 2:
+        print("Usage: python main.py <config_file>", file=sys.stderr)
+        sys.exit(1)
+
+    filepath = Path(sys.argv[1])
+    if not filepath.exists():
+        print(f"Error: file '{filepath}' not found", file=sys.stderr)
+        sys.exit(1)
 
     try:
-        with open(args.input, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # Парсинг и вычисление
-        result = parse_and_evaluate(content)
-        
-        # Вывод JSON
-        json_output = json.dumps(result, ensure_ascii=False, indent=2)
-        sys.stdout.write(json_output)
-        
-    except ConfigError as e:
-        sys.stderr.write(str(e) + '\n')
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read()
+        result = parse_config(text)
+        json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
+        print()
+    except UnexpectedInput as e:
+        print(f"Syntax error at line {e.line}, column {e.column}:\n{e.get_context(text)}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Semantic error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        sys.stderr.write(f"Internal error: {str(e)}\n")
+        print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
 ```
-### Файл config_parser.py
+### Файл test_main.py
 ```
-import re
+import json
+import tempfile
+from pathlib import Path
+from main import parse_config
 
-class Token:
-    """Представляет лексему с типом, значением и позицией"""
-    __slots__ = ('type', 'value', 'line', 'col')
-    
-    def __init__(self, type, value, line, col):
-        self.type = type
-        self.value = value
-        self.line = line
-        self.col = col
+def test_numbers_and_strings():
+    config = '''
+    42;
+    "hello";
+    '''
+    result = parse_config(config)
+    assert result == [42, "hello"]
 
-class ConfigError(Exception):
-    """Класс для ошибок конфигурации"""
-    def __init__(self, message, token=None):
-        if token:
-            message = f"Line {token.line}, Col {token.col}: {message}"
-        super().__init__(message)
+def test_arrays():
+    config = '''
+    array(1, "a", 3);
+    '''
+    result = parse_config(config)
+    assert result == [[1, "a", 3]]
 
-def tokenize(source_code):
-    """Лексический анализатор - разбивает код на токены"""
-    token_specs = [
-        ('COMMENT', r'%[^\n]*'),
-        ('WHITESPACE', r'[ \t\r\n]+'),
-        ('DICT_OPEN', r'\(\['),
-        ('DICT_CLOSE', r'\]\)'),
-        ('ARRAY_KEYWORD', r'array'),
-        ('DEF', r'def'),
-        ('CHR', r'chr'),
-        ('LEN', r'len'),
-        ('NUMBER', r'\d+'),
-        ('STRING', r'"(?:\\.|[^"\\])*"'),
-        ('NAME', r'[A-Za-z_][A-Za-z0-9_]*'),
-        ('LPAREN', r'\('),
-        ('RPAREN', r'\)'),
-        ('LBRACE', r'\{'),
-        ('RBRACE', r'\}'),
-        ('COLON', r':'),
-        ('COMMA', r','),
-        ('PLUS', r'\+'),
-        ('MINUS', r'-'),
-        ('TIMES', r'\*'),
-        ('DIV', r'/'),
-        ('SEMICOLON', r';'),
-    ]
-    
-    # Регулярное выражение для всех токенов
-    tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_specs)
-    
-    tokens = []
-    line = 1
-    col = 1
-    
-    for mo in re.finditer(tok_regex, source_code):
-        kind = mo.lastgroup
-        value = mo.group()
-        
-        # Пропускаем комментарии и пробелы
-        if kind == 'COMMENT' or kind == 'WHITESPACE':
-            # Обновляем позицию
-            for char in value:
-                if char == '\n':
-                    line += 1
-                    col = 1
-                else:
-                    col += 1
-            continue
-        
-        # Создаем токен
-        token = Token(kind, value, line, col)
-        tokens.append(token)
-        
-        # Обновляем позицию
-        for char in value:
-            if char == '\n':
-                line += 1
-                col = 1
-            else:
-                col += 1
-    
-    return tokens
+def test_nested_structures():
+    config = '''
+    array(
+        ([ A: "x", B: 10 ]),
+        "top"
+    );
+    '''
+    result = parse_config(config)
+    expected = [[{"A": "x", "B": 10}, "top"]]
+    assert result == expected
 
-class Parser:
-    """Синтаксический анализатор - строит AST"""
-    def __init__(self, tokens):
-        self.tokens = tokens
-        self.pos = 0
-        self.current_token = self.tokens[0] if tokens else None
-    
-    def parse_program(self):
-        """Парсит всю программу"""
-        definitions = []
-        
-        # Парсим определения констант
-        while self.current_token and self.current_token.type == 'LPAREN':
-            next_token = self.peek()
-            if next_token and next_token.type == 'DEF':
-                definitions.append(self.parse_definition())
-            else:
-                break
-        
-        # Парсим основное выражение
-        main_expr = self.parse_expr()
-        
-        if self.current_token:
-            raise ConfigError(
-                f"Unexpected token after main expression: {self.current_token.type}",
-                self.current_token
-            )
-        
-        return Program(definitions, main_expr)
-    
-    def parse_definition(self):
-        """Парсит определение константы"""
-        self.consume('LPAREN')
-        self.consume('DEF', "Expected 'def' after '('")
-        
-        name_token = self.consume('NAME', "Expected constant name after 'def'")
-        value_expr = self.parse_expr()
-        
-        self.consume('RPAREN', "Expected ')' after constant value")
-        self.consume('SEMICOLON', "Expected ';' after definition")
-        
-        return Definition(name_token.value, value_expr)
-    
-    def parse_expr(self):
-        """Парсит выражение"""
-        if self.current_token is None:
-            raise ConfigError("Unexpected end of input")
-        
-        token_type = self.current_token.type
-        
-        if token_type == 'NUMBER':
-            token = self.consume('NUMBER')
-            return NumberNode(token.value)
-        elif token_type == 'STRING':
-            token = self.consume('STRING')
-            return StringNode(token.value[1:-1])
-        elif token_type == 'NAME':
-            token = self.consume('NAME')
-            return NameNode(token.value)
-        elif token_type == 'ARRAY_KEYWORD':
-            return self.parse_array_expr()
-        elif token_type == 'DICT_OPEN':
-            return self.parse_dict_expr()
-        elif token_type == 'LBRACE':
-            return self.parse_brace_expr()
-        else:
-            raise ConfigError(
-                f"Unexpected token in expression: {token_type}",
-                self.current_token
-            )
-    
-    def parse_array_expr(self):
-        """Парсит массив"""
-        self.consume('ARRAY_KEYWORD')
-        self.consume('LPAREN', "Expected '(' after 'array'")
-        
-        elements = []
-        if self.current_token and self.current_token.type != 'RPAREN':
-            elements.append(self.parse_expr())
-            while self.current_token and self.current_token.type == 'COMMA':
-                self.consume('COMMA')
-                elements.append(self.parse_expr())
-        
-        self.consume('RPAREN', "Expected ')' to close array")
-        return ArrayNode(elements)
-    
-    def parse_dict_expr(self):
-        """Парсит словарь"""
-        self.consume('DICT_OPEN')
-        
-        pairs = []
-        if self.current_token and self.current_token.type != 'DICT_CLOSE':
-            while True:
-                if self.current_token.type != 'NAME':
-                    raise ConfigError(
-                        f"Expected key name in dictionary, got {self.current_token.type}",
-                        self.current_token
-                    )
-                
-                name_token = self.consume('NAME', "Expected key name in dictionary")
-                self.consume('COLON', "Expected ':' after key name")
-                value_expr = self.parse_expr()
-                
-                pairs.append((name_token.value, value_expr))
-                
-                if self.current_token and self.current_token.type == 'COMMA':
-                    self.consume('COMMA')
-                else:
-                    break
-        
-        self.consume('DICT_CLOSE', "Expected '])' to close dictionary")
-        return DictNode(pairs)
-    
-    def parse_brace_expr(self):
-        """Парсит операцию в фигурных скобках"""
-        self.consume('LBRACE')
-        
-        if self.current_token is None:
-            raise ConfigError("Unexpected end of input in brace expression")
-        
-        op_token = self.current_token
-        if op_token.type in ['PLUS', 'MINUS', 'TIMES', 'DIV']:
-            op_str = op_token.value
-            self.advance()
-        elif op_token.type in ['CHR', 'LEN']:
-            op_str = op_token.value.lower()
-            self.advance()
-        else:
-            raise ConfigError(
-                f"Expected operator in brace expression, got {op_token.type}",
-                op_token
-            )
-        
-        args = []
-        while self.current_token and self.current_token.type != 'RBRACE':
-            args.append(self.parse_expr())
-        
-        self.consume('RBRACE', "Expected '}' to close brace expression")
-        return BraceNode(op_str, args)
-    
-    # Вспомогательные методы
-    def advance(self):
-        self.pos += 1
-        if self.pos < len(self.tokens):
-            self.current_token = self.tokens[self.pos]
-        else:
-            self.current_token = None
-    
-    def peek(self):
-        if self.pos + 1 < len(self.tokens):
-            return self.tokens[self.pos + 1]
-        return None
-    
-    def consume(self, token_type, error_msg=None):
-        if self.current_token is None:
-            raise ConfigError("Unexpected end of input")
-        if self.current_token.type != token_type:
-            if error_msg:
-                raise ConfigError(error_msg, self.current_token)
-            raise ConfigError(
-                f"Expected {token_type}, got {self.current_token.type}",
-                self.current_token
-            )
-        token = self.current_token
-        self.advance()
-        return token
+def test_constants_and_expressions():
+    config = '''
+    (def SIZE 10);
+    (def LABEL "Player");
+    {+ SIZE 5};
+    {len LABEL};
+    {chr 65};
+    '''
+    result = parse_config(config)
+    assert result == [15, 6, "A"]
 
-class Evaluator:
-    """Интерпретатор - вычисляет значения выражений"""
-    def __init__(self, env=None):
-        self.env = env if env is not None else {}
-    
-    def evaluate(self, node):
-        """Вычисляет значение узла AST"""
-        if isinstance(node, NumberNode):
-            return int(node.value)
-        elif isinstance(node, StringNode):
-            return node.value
-        elif isinstance(node, NameNode):
-            if node.name in self.env:
-                return self.env[node.name]
-            raise ConfigError(f"Undefined constant: {node.name}")
-        elif isinstance(node, ArrayNode):
-            return [self.evaluate(elem) for elem in node.elements]
-        elif isinstance(node, DictNode):
-            return {name: self.evaluate(expr) for name, expr in node.pairs}
-        elif isinstance(node, BraceNode):
-            return self.evaluate_brace(node)
-        else:
-            raise ConfigError(f"Unknown node type: {type(node)}")
-    
-    def evaluate_brace(self, node):
-        """Вычисляет операцию в фигурных скобках"""
-        args = [self.evaluate(arg) for arg in node.args]
-        op = node.op.lower()
-        
-        if op == '+':
-            self._check_arity(args, 2, '+')
-            self._check_all_int(args, '+')
-            return args[0] + args[1]
-        elif op == '-':
-            self._check_arity(args, 2, '-')
-            self._check_all_int(args, '-')
-            return args[0] - args[1]
-        elif op == '*':
-            self._check_arity(args, 2, '*')
-            self._check_all_int(args, '*')
-            return args[0] * args[1]
-        elif op == '/':
-            self._check_arity(args, 2, '/')
-            self._check_all_int(args, '/')
-            if args[1] == 0:
-                raise ConfigError("Division by zero in constant expression")
-            return args[0] // args[1]
-        elif op == 'chr':
-            self._check_arity(args, 1, 'chr')
-            if not isinstance(args[0], int):
-                raise ConfigError("chr() expects an integer argument")
-            try:
-                return chr(args[0])
-            except ValueError as e:
-                raise ConfigError(f"chr() error: {str(e)}")
-        elif op == 'len':
-            self._check_arity(args, 1, 'len')
-            arg = args[0]
-            if isinstance(arg, str) or isinstance(arg, list):
-                return len(arg)
-            raise ConfigError(f"len() expects string or array, got {type(arg).__name__}")
-        else:
-            raise ConfigError(f"Unknown operator: {op}")
-    
-    def _check_arity(self, args, expected, op):
-        if len(args) != expected:
-            raise ConfigError(f"{op} expects {expected} arguments, got {len(args)}")
-    
-    def _check_all_int(self, args, op):
-        if not all(isinstance(a, int) for a in args):
-            types = ', '.join(type(a).__name__ for a in args)
-            raise ConfigError(f"{op} expects integer arguments, got types: {types}")
+def test_dict():
+    config = '''
+    ([
+        NAME: "Server",
+        PORT: 8080,
+        TAGS: array("http", "api")
+    ]);
+    '''
+    result = parse_config(config)
+    expected = [{"NAME": "Server", "PORT": 8080, "TAGS": ["http", "api"]}]
+    assert result == expected
 
-def parse_and_evaluate(source_code):
-    """Основная функция парсинга и вычисления"""
-    tokens = tokenize(source_code)
-    parser = Parser(tokens)
-    program = parser.parse_program()
-    
-    env = {}
-    evaluator = Evaluator(env)
-    
-    # Вычисляем определения констант
-    for definition in program.definitions:
-        try:
-            value = evaluator.evaluate(definition.value_expr)
-            env[definition.name] = value
-        except Exception as e:
-            raise ConfigError(f"Error in definition '{definition.name}': {str(e)}")
-    
-    # Вычисляем основное выражение
-    result = evaluator.evaluate(program.main_expr)
-    return result
+def test_complex():
+    config = '''
+    (def X 3);
+    (def Y 4);
+    ([
+        AREA: {* X Y},
+        MSG: {chr {+ 65 X}}
+    ]);
+    '''
+    result = parse_config(config)
+    expected = [{"AREA": 12, "MSG": "D"}]
+    assert result == expected
+
+if __name__ == "__main__":
+    test_numbers_and_strings()
+    test_arrays()
+    test_nested_structures()
+    test_constants_and_expressions()
+    test_dict()
+    test_complex()
+    print("All tests passed!")
 ```
