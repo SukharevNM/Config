@@ -1,7 +1,7 @@
 # Учебный конфигурационный язык - CLI инструмент
-## Проект реализует интерпретатор и транслятор для учебного конфигурационного языка, который преобразует конфигурационные файлы в формат JSON.
+## Проект реализует интерпретатор для специализированного конфигурационного языка, который преобразует конфигурационные файлы в формат JSON.
 Он позволяет: создавать конфигурации на специализированном языке,
-делать вычисления в конфигурациях,
+делать вычисления арифметических выражений в конфигурациях,
 работать со строками и символами,
 обнаруживать синтаксические ошибки и неопределённые константы,
 работать через командную строку с файлами конфигурации,
@@ -9,15 +9,15 @@
 ## Синтаксис учебного конфигурационного языка
 ### Константы
 ```
-(def NAME value);
+(def ИМЯ значение);
 ```
 ### Поддерживаются числа, строки, массивы и словари.
 ### Арифмитические вычисления
 ```
-{+ 10 20};
-{- 100 50};
-{* 5 4};
-{/ 100 4};
+{+ 10 20}
+{- 100 50}
+{* 5 4}
+{/ 100 4}
 ```
 ### Словари
 ```
@@ -30,7 +30,6 @@
 ```
 ### Массивы
 ```
-array(1, 2, 3, "text")
 array(
     ([ x: 1, y: 2 ]),
     ([ x: 3, y: 4 ])
@@ -50,10 +49,9 @@ array(
 ```
 ### Специальные функции
 ```
-{chr 65};
-{chr 960};
-{len "Hello"};
-{len array(1,2,3)};
+{chr 65}
+{chr 960}
+{len "Hello"}
 ```
 ### Установка
 ```
@@ -63,63 +61,77 @@ cd Config
 ###  Использование
 Через командную строку с файлом: 
 ```
-python main.py --input config.conf
+python main.py <config_file>
 ```
 ### Пример ввода
 ```
-(def MAX 10);
-(def PORT {+ 80 443});
+(def MAXPLAYERS 4);
+(def DEFAULTHEALTH 100);
 
 ([
-    server: ([
-        max_connections: MAX,
-        port: PORT
-    ])
-])
+  GAMETITLE: "Space Adventure",
+  MAXPLAYERS: MAXPLAYERS,
+  DEFAULTSTATS: ([
+    HEALTH: DEFAULTHEALTH,
+    AMMO: 50
+  ]),
+  UPGRADES: array(
+    {+ DEFAULTHEALTH 20},
+    {chr 85}
+  )
+]);
 ```
 ### Пример вывода JSON
 ```
-{
-  "server": {
-    "max_connections": 10,
-    "port": 523
+[
+  {
+    "GAMETITLE": "Space Adventure",
+    "MAXPLAYERS": 4,
+    "DEFAULTSTATS": {
+      "HEALTH": 100,
+      "AMMO": 50
+    },
+    "UPGRADES": [
+      120,
+      "U"
+    ]
   }
-}
+]
 ```
 ## Примеры конфигураций и вывод в JSON
 Веб-сервер
 Конфигурация: 
 ```
-(def MAX_CONNECTIONS 1000);
-(def DEFAULT_PORT 80);
-(def SSL_PORT {+ DEFAULT_PORT 443});
+(def PORTBASE 8000);
+(def ENV "prod");
 
 ([
-    server: ([
-        port: DEFAULT_PORT,
-        ssl: ([
-            port: SSL_PORT,
-            certificate: "/etc/ssl/cert.pem"
-        ])
-    ]),
-    limits: ([
-        max_connections: MAX_CONNECTIONS
-    ])
-])
+  SERVER: ([
+    HOST: "0.0.0.0",
+    PORT: {+ PORTBASE 80},
+    ENVNAME: ENV,
+    LOGLEVEL: {chr 73}
+  ]),
+  FEATURES: array("ssl", "gzip", {len ENV})
+]);
 ```
 Вывод JSON:
 ```
-{
-  "server": {
-    "port": 80,
-    "ssl": {
-      "port": 523,
-      "certificate": "/etc/ssl/cert.pem"
-    }
-  },
-  "limits": {
-    "max_connections": 1000
+[
+  {
+    "SERVER": {
+      "HOST": "0.0.0.0",
+      "PORT": 8080,
+      "ENVNAME": "prod",
+      "LOGLEVEL": "I"
+    },
+    "FEATURES": [
+      "ssl",
+      "gzip",
+      4
+    ]
   }
+]
 }
 ```
 Геометрические вычисления
@@ -127,87 +139,86 @@ python main.py --input config.conf
 ```
 (def PI 3);
 (def RADIUS 5);
-(def DIAMETER { * RADIUS 2 });
-(def AREA { * PI { * RADIUS RADIUS }});
 
 ([
-    circle: ([
-        radius: RADIUS,
-        diameter: DIAMETER,
-        area: AREA
-    ]),
-    special_chars: ([
-        pi_symbol: {chr 960}
-    ])
-])
+  CIRCLE: ([
+    RADIUS: RADIUS,
+    AREA: {* PI {* RADIUS RADIUS}},
+    LABEL: {chr 67}
+  ]),
+  RECT: ([
+    WIDTH: 10,
+    HEIGHT: {+ RADIUS 2}
+  ])
+]);
 ```
 Вывод JSON: 
 ```
-{
-  "circle": {
-    "radius": 5,
-    "diameter": 10,
-    "area": 75
-  },
-  "special_chars": {
-    "pi_symbol": "π"
+[
+  {
+    "CIRCLE": {
+      "RADIUS": 5,
+      "AREA": 75,
+      "LABEL": "C"
+    },
+    "RECT": {
+      "WIDTH": 10,
+      "HEIGHT": 7
+    }
   }
-}
+]
 ```
 Игра
 Конфигурация: 
 ```
-(def MAX_HEALTH 100);
-(def BOSS_HEALTH { * MAX_HEALTH 3 });
+(def MAXPLAYERS 4);
+(def DEFAULTHEALTH 100);
 
 ([
-    player: ([
-        stats: ([
-            health: MAX_HEALTH
-        ])
-    ]),
-    enemies: array(
-        ([
-            type: "Dragon",
-            health: BOSS_HEALTH
-        ])
-    )
-])
+  GAMETITLE: "Space Adventure",
+  MAXPLAYERS: MAXPLAYERS,
+  DEFAULTSTATS: ([
+    HEALTH: DEFAULTHEALTH,
+    AMMO: 50
+  ]),
+  UPGRADES: array(
+    {+ DEFAULTHEALTH 20},
+    {chr 85}
+  )
+]);
 ```
 Вывод JSON:
 ```
-{
-  "player": {
-    "stats": {
-      "health": 100
-    }
-  },
-  "enemies": [
-    {
-      "type": "Dragon",
-      "health": 300
-    }
-  ]
-}
+[
+  {
+    "GAMETITLE": "Space Adventure",
+    "MAXPLAYERS": 4,
+    "DEFAULTSTATS": {
+      "HEALTH": 100,
+      "AMMO": 50
+    },
+    "UPGRADES": [
+      120,
+      "U"
+    ]
+  }
+]
 ```
 ## Тесты
-Проект покрыт тестами с использованием unittest:
+Проект покрыт тестами с использованием простых функций проверки:
 |Тест|Описание|Ожидаемый результат|
 |----|--------|-------------------|
-|test_web_server_config|Конфигурация веб-сервера|Правильный JSON со значениями констант|
-|test_geometry_config|Геометрические вычисления|Правильные вычисления и Unicode символы|
-|test_game_config|Игровая конфигурация|Сложные структуры и вычисления|
+|test_numbers_and_strings|Базовые типы данных (числа и строки)|Правильное преобразование чисел и строк|
+|test_arrays|Создание и обработка массивов|Корректные массивы с разными типами элементов|
+|test_nested_structures|Вложенные структуры (массивы со словарями)|Правильная вложенность структур данных|
+|test_constants_and_expressions|Константы и арифметические выражения|Вычисление выражений и работа с константами|
+|test_dict|Создание и обработка словарей|Корректные словари с ключами и значениями|
+|test_complex|Комплексные сценарии с комбинацией функций|Корректная работа всех возможностей языка|
 ### Запуск тестов
 python test_main.py
 ### Ожидаемый вывод
 ```
-Запуск тестов конфигурационного языка...
-test_game_config (__main__.ConfigLanguageTests.test_game_config) ... ok
-test_geometry_config (__main__.ConfigLanguageTests.test_geometry_config) ... ok
-test_web_server_config (__main__.ConfigLanguageTests.test_web_server_config) ... ok
-
-----------------------------------------------------------------------
-Ran 3 tests in 0.XXXs
+All tests passed!
 ```
 ### Обработка ошибок
 Синтаксическая ошибка:
@@ -218,16 +229,18 @@ Ran 3 tests in 0.XXXs
 ```
 Вывод: 
 ```
-Line 2, Col 5: Expected key name in dictionary, got STRING
+Syntax error at line 2, column 5:
+    invalid key "value"  % Пропущено двоеточие
+    ^
 ```
 Неопределённая константа:
 ```
 (def ZERO 0);
-({/ 10 ZERO});
+({/ 10 UNKNOWN});
 ```
 Вывод:
 ```
-Line 2, Col 1: Division by zero in constant expression
+Semantic error: Undefined constant: UNKNOWN
 ```
 Ошибка типа:
 ```
@@ -235,7 +248,7 @@ Line 2, Col 1: Division by zero in constant expression
 ```
 Вывод:
 ```
-Line 1, Col 1: + expects integer arguments, got types: int, str
+Semantic error: + expects integer arguments, got types: int, str
 ```
 ## Пример кода
 ### Файл main.py
